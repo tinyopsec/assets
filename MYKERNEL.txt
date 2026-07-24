@@ -1,0 +1,323 @@
+#
+# MYKERNEL -- Custom performance kernel for FreeBSD 15.1-RELEASE
+# Based on GENERIC. Target hardware (from hardware_survey_20260724_140734.txt):
+#   Samsung 300E4Z/300E5Z/300E7Z laptop, Intel Celeron B800 @ 1.50GHz
+#   (Sandy Bridge, 2 cores/no HT, no AES-NI, no RDRAND), 2GB RAM,
+#   Intel HM65 (Cougar Point) chipset, ST9500325AS 500GB 5400RPM SATA (ada0,
+#   AHCI), Intel HD Graphics (vgapci0, i915kms), Intel Centrino Wireless-N 130
+#   (iwn0), Realtek ALC269 via Intel HDA (hdac0), 2x EHCI USB2.0 controllers
+#   (no xHCI/USB3, no UHCI/OHCI USB1.1 companions), PS/2 keyboard+trackpad,
+#   UEFI boot. No wired Ethernet NIC, no Bluetooth, no SD reader, no SCSI/RAID
+#   hardware present in the pciconf listing.
+#
+# Goal: light gaming (GL/Vulkan via Linuxulator), heavy browsing w/ GPU accel,
+# general multitasking. Every removal/keep below is tied to that survey data.
+#
+
+cpu		HAMMER
+ident		MYKERNEL
+
+makeoptions	WITH_CTF=1		# Keep: needed for ctfconvert; harmless at runtime, helps future debugging w/o DDB
+# makeoptions	DEBUG=-g		# STRIP: gdb symbols bloat the kernel image and slow boot/load; no local kernel debugging planned
+
+options 	SCHED_ULE		# KEEP (required): the interactive-friendly scheduler you asked to keep
+# options	SCHED_4BSD		# STRIP: mutually exclusive with ULE anyway; ULE is the better desktop/gaming choice on a 2-core CPU
+# options	NUMA			# STRIP: survey shows "1 package(s) x 2 core(s)" - single-socket, no NUMA topology exists, pure dead weight
+options 	PREEMPTION		# ADD/KEEP (requested): lets high-priority threads (audio, input, GPU IRQ) interrupt lower-priority ones -> lower input/frame latency
+# options	EXTERR_STRINGS		# STRIP: extended error-string tables are a debugging aid, not needed on a personal system
+# options	VIMAGE			# STRIP: virtualized network stacks (VNET/jails) - single physical NIC (WiFi), no jails, unnecessary overhead on every packet
+options 	INET			# KEEP (required): IPv4
+# options	INET6			# STRIP (requested): IPv6 fully removed at compile time - most robust "disable" possible, nothing left to turn off in loader.conf
+# options	IPSEC_SUPPORT		# STRIP: no VPN/IPsec use case described
+# options	IPSEC_OFFLOAD		# STRIP: depends on IPSEC_SUPPORT, removed with it
+# options	ROUTE_MPATH		# STRIP: multipath routing is a router/server feature; single default route over WiFi
+# options	FIB_ALGO		# STRIP: modular FIB lookup algorithms only matter with large/complex routing tables; not this laptop
+# options	TCP_OFFLOAD		# STRIP: iwn0 has no TCP offload engine; this option only matters with TOE-capable NICs
+# options	TCP_BLACKBOX		# STRIP: TCP event-logging/debugging facility, pure overhead here
+options 	TCP_HHOOK		# KEEP: required dependency for TCP_RFC7413 below
+# options	TCP_RFC7413		# STRIP-> see note: kept below, see next line
+options 	TCP_RFC7413		# KEEP: TCP Fast Open shaves a round trip off repeat HTTPS connections - real win for "heavy browsing" over a higher-latency WiFi link
+# options	SCTP_SUPPORT		# STRIP (requested): SCTP unused
+# options	KERN_TLS		# STRIP: survey dmesg shows "aesni0: No AES or SHA support" - this CPU has no crypto acceleration, so kernel TLS offload has nothing to accelerate; browsers do TLS in userspace anyway
+options 	FFS			# KEEP (required): your root is UFS (vfs.root.mountfrom: ufs:/dev/ada0p3)
+options 	SOFTUPDATES		# KEEP: essential write-performance feature on a 5400RPM HDD - avoids synchronous metadata writes
+# options	UFS_ACL			# STRIP: ACLs unused on a single-user personal laptop
+options 	UFS_DIRHASH		# KEEP: speeds up large directories (browser cache, Steam/Proton compat dirs) - cheap, real win
+# options	UFS_GJOURNAL		# STRIP: gjournal not set up on this disk (plain freebsd-ufs partition), adds overhead for nothing
+# options	QUOTA			# STRIP: disk quotas are a multi-user feature, irrelevant here
+# options	MD_ROOT			# STRIP: root is UFS on ada0p3, not an MD image; "device md" pseudo-device below is kept separately for ISO/swap-file use
+# options	NFSCL			# STRIP: no NFS client use case
+# options	NFSD			# STRIP: not a file server
+# options	NFSLOCKD		# STRIP: depends on NFS, removed with it
+# options	NFS_ROOT		# STRIP: root is local UFS, not NFS
+options 	MSDOSFS			# KEEP: most USB flash drives are FAT32 - needed so your "mass storage" requirement actually works for plug-in sticks
+# options	CD9660			# STRIP: paired with removing the physical DVD drive below; add back only if you plan to mount downloaded ISOs via md(4)
+# options	PROCFS			# STRIP: native FreeBSD /proc is rarely used by anything on this system
+options 	PSEUDOFS		# KEEP: framework required by PROCFS/linprocfs - kept specifically so linprocfs.ko (Linux /proc) can be loaded for Steam/Proton under the Linuxulator later
+options 	TMPFS			# KEEP: puts /tmp in RAM instead of the slow 5400RPM disk - real snappiness win, and reduces HDD wear
+# options	GEOM_RAID		# STRIP (requested): single disk (ada0), no RAID
+options 	GEOM_LABEL		# KEEP: cheap, gives stable /dev/gpt/... names, no measurable cost
+options 	EFIRT			# KEEP (required): machdep.bootmethod is UEFI - EFI Runtime Services needed to boot/resume correctly
+# options	COMPAT_FREEBSD32	# STRIP: no 32-bit *FreeBSD* binaries in use (this is about FreeBSD ABI compat, not Linux - Linuxulator is handled separately, see loader.conf notes)
+# options	COMPAT_FREEBSD4		# STRIP: legacy ABI shims for decade+-old binaries, pure bloat on a fresh 15.1 install
+# options	COMPAT_FREEBSD5		# STRIP: see above
+# options	COMPAT_FREEBSD6		# STRIP: see above
+# options	COMPAT_FREEBSD7		# STRIP: see above
+# options	COMPAT_FREEBSD9		# STRIP: see above
+# options	COMPAT_FREEBSD10	# STRIP: see above
+# options	COMPAT_FREEBSD11	# STRIP: see above
+# options	COMPAT_FREEBSD12	# STRIP: see above
+# options	COMPAT_FREEBSD13	# STRIP: see above
+# options	COMPAT_FREEBSD14	# STRIP: see above
+# options	SCSI_DELAY=5000		# STRIP: no SCSI controllers/devices remain in this config (see peripherals section)
+# options	KTRACE			# STRIP (debugging overhead, requested)
+# options	STACK			# STRIP (debugging overhead, requested)
+options 	SYSVSHM			# KEEP: X11's MIT-SHM extension leans on SysV shared memory - matters for Xorg + game rendering performance
+options 	SYSVMSG			# KEEP: small, some Wine/Proton titles use SysV IPC
+options 	SYSVSEM			# KEEP: same as above, cheap and used by X11/Wine
+options 	_KPOSIX_PRIORITY_SCHEDULING # KEEP: cheap, used by some audio/games for realtime-ish priority
+options 	PRINTF_BUFR_SIZE=128	# KEEP: harmless, prevents interleaved console output
+options 	KBD_INSTALL_CDEV	# KEEP: needed for normal /dev/kbd* keyboard device nodes
+# options	HWPMC_HOOKS		# STRIP: performance-counter profiling hooks, a debugging/profiling feature you don't need
+# options	AUDIT			# STRIP (requested): "no extra auditing"
+options 	CAPABILITY_MODE		# KEEP - IMPORTANT: this is Capsicum, NOT the MAC framework. Firefox/Chromium use Capsicum to sandbox their renderer/GPU processes on FreeBSD. Stripping this would break browser sandboxing, so it's kept despite the general "strip security extras" instruction.
+options 	CAPABILITIES		# KEEP: see CAPABILITY_MODE above, required companion option
+# options	MAC			# STRIP: this is the separate TrustedBSD Mandatory Access Control framework (SELinux-style policies) - not what browsers use for sandboxing, and you asked not to enable MAC frameworks beyond default. Removing it also drops per-syscall MAC hook overhead.
+# options	KDTRACE_FRAME		# STRIP: DTrace kernel hooks, debugging feature
+# options	KDTRACE_HOOKS		# STRIP: DTrace kernel hooks, debugging feature
+# options	DDB_CTF			# STRIP: tied to DDB, which is removed below
+# options	INCLUDE_CONFIG_FILE	# STRIP: embeds this text file into the kernel binary; not needed without DDB to read it back out of
+# options	RACCT			# STRIP: resource-accounting framework, mainly a jails feature; adds bookkeeping on every process resource event
+# options	RACCT_DEFAULT_TO_DISABLED # STRIP: removed with RACCT
+# options	RCTL			# STRIP: resource limits framework, same rationale as RACCT
+
+# Debugging support - fully removed per your request (KDB/DDB/GDB, all of it):
+# options	KDB			# STRIP (requested)
+# options	KDB_TRACE		# STRIP (requested)
+
+# Compression support - only used for kernel crash dumps, which we're not configuring
+# options	GZIO			# STRIP: dump compression, no dumps planned
+# options	ZSTDIO			# STRIP: dump compression, no dumps planned
+
+# Kernel dump features - all debugging/crash-dump infrastructure, removed:
+# options	EKCD			# STRIP
+# options	DEBUGNET		# STRIP
+# options	NETDUMP			# STRIP
+# options	NETGDB			# STRIP
+
+# SMP - REQUIRED: survey confirms "FreeBSD/SMP: 1 package(s) x 2 core(s))"
+options 	SMP			# KEEP (required): you have 2 real cores, must have SMP to use both
+
+# CPU frequency control
+device		cpufreq			# KEEP (required): infrastructure the 'est' driver plugs into
+
+# Bus support.
+device		acpi			# KEEP (required): needed for boot, power/thermal management, essential on any modern x86
+device		smbios			# KEEP: tiny, gives you hw.model etc, no cost
+# options	IOMMU			# STRIP: IOMMU/VT-d passthrough is a virtualization feature; Sandy Bridge Celeron B800 doesn't do VM passthrough workloads here
+device		pci			# KEEP (required)
+# options	PCI_HP			# STRIP: PCIe native hotplug is a docking-station/server feature, this laptop's PCIe devices are fixed internal components
+# options	PCI_IOV			# STRIP: SR-IOV virtualization, not applicable to a personal laptop
+
+options 	COMPAT_LINUXKPI		# KEEP (required): this is the Linux-Kernel-API shim that drm.ko/i915kms.ko are built against - removing it breaks your GPU acceleration entirely
+
+# options	PPS_SYNC		# STRIP: pulse-per-second precision timing for GPS-disciplined NTP servers, irrelevant to a laptop
+
+# Floppy drives
+# device	fdc			# STRIP: no floppy hardware exists on a 2012 laptop
+
+# ATA controllers
+device		ahci			# KEEP (required): confirmed hardware - "ahci0: <Intel 6 Series/C200 ... 6 port Mobile SATA AHCI Controller>"
+# device	ata			# STRIP: legacy PATA channel driver, superseded by ahci(4) for this AHCI-mode SATA controller; no PATA/IDE hardware present
+# device	mvs			# STRIP: Marvell SATA controller, not this Intel chipset
+# device	siis			# STRIP: SiliconImage SATA controller, not present
+
+# SCSI Controllers - none present in pciconf output, all stripped (requested):
+# device	ahc			# STRIP
+# device	ahd			# STRIP
+# device	hptiop			# STRIP
+# device	isp			# STRIP
+# device	mpt			# STRIP
+# device	mps			# STRIP
+# device	mpr			# STRIP
+# device	mpi3mr			# STRIP
+# device	sym			# STRIP
+# device	isci			# STRIP
+# device	ocs_fc			# STRIP
+# device	pvscsi			# STRIP
+
+# ATA/SCSI peripherals
+device		scbus			# KEEP (required, corrected): despite pure-AHCI/SATA use, CAM's scbus glue is what lets ada0 attach at all - this is NOT SCSI-specific, the GENERIC comment itself says "required for ATA/SCSI"
+device		ada			# ADDED - IMPORTANT FIX: this line was missing from the base file you supplied. ada(4) is the actual SATA disk driver; without it ada0 (your ST9500325AS boot disk) cannot attach. Required.
+# device	ch			# STRIP: no SCSI media changer
+device		da			# KEEP - IMPORTANT: USB flash drives attach through umass -> CAM as da(4), NOT ada(4). Stripping this would silently break your "USB mass storage" requirement.
+# device	sa			# STRIP: no tape drive
+# device	cd			# STRIP (requested): removes DVD/CD-ROM support (survey shows a TSSTcorp CD/DVD drive at cd0)
+device		pass			# KEEP: tiny CAM passthrough device, needed by smartctl(8) for HDD S.M.A.R.T. health monitoring on ada0 - worth keeping on a 14-year-old mechanical disk
+# device	ses			# STRIP: enclosure services, no storage enclosure hardware
+# device	ctl			# STRIP: CAM target layer (iSCSI/FC target mode), not applicable
+
+# RAID controllers interfaced to the SCSI subsystem - none present, all stripped (requested):
+# device	arcmsr			# STRIP
+# device	ciss			# STRIP
+# device	ips			# STRIP
+# device	smartpqi		# STRIP
+# device	tws			# STRIP
+
+# RAID controllers - none present, all stripped (requested):
+# device	aac			# STRIP
+# device	aacp			# STRIP
+# device	aacraid			# STRIP
+# device	ida			# STRIP
+# device	mfi			# STRIP
+# device	mlx			# STRIP
+# device	mrsas			# STRIP
+
+# NVM Express (NVMe) - no NVMe device in pciconf; this 2012 laptop predates NVMe entirely
+# device	nvme			# STRIP
+# device	nvd			# STRIP
+
+# Universal Flash Storage - mobile/eMMC-successor tech, not present on this SATA laptop
+# device	ufshci			# STRIP
+
+# Intel VMD - postdates this HM65/Cougar Point chipset by years, not applicable
+# device	vmd			# STRIP
+
+# atkbdc0 controls both the keyboard and the PS/2 mouse - KEEP ALL: survey's own
+# interrupt stats (vmstat -i) show live irq1:atkbd0 and irq12:psm0 traffic,
+# confirming your built-in keyboard and trackpad are real PS/2 hardware, actively in use.
+device		atkbdc			# KEEP (required): AT keyboard controller
+device		atkbd			# KEEP (required): built-in keyboard
+device		psm			# KEEP (required): built-in trackpad
+
+device		kbdmux			# KEEP: cleanly muxes atkbd + any future USB keyboard input
+
+# syscons is the legacy console; vt(4) below is what actually drives your EFI framebuffer
+# device	vga			# STRIP: legacy VGA text driver, superseded by vt/vt_efifb on this UEFI system
+# device	splash			# STRIP: cosmetic boot splash, dropped in favor of fastest possible boot
+# device	sc			# STRIP: legacy syscons console; vt(4) is FreeBSD's modern default and is what's actually in use (dmesg: "VT(efifb): resolution 1024x768")
+# options	SC_PIXEL_MODE		# STRIP: tied to sc(4), removed with it
+
+# vt is the default video console driver
+device		vt			# KEEP (required): your active console driver
+# device	vt_vga			# STRIP: legacy BIOS VGA text-mode fallback, unnecessary - you boot UEFI
+device		vt_efifb		# KEEP (required): survey dmesg confirms "VT(efifb)" is literally your boot console right now
+# device	vt_vbefb		# STRIP: VESA BIOS Extensions framebuffer is a legacy-BIOS-boot fallback; machdep.bootmethod is UEFI, this is dead code here
+
+# device	agp			# STRIP: legacy AGP GART shim; i915kms/DRM-KMS manages the GTT internally on this PCIe-based integrated GPU, agp(4) isn't in that path
+
+# CardBus bridge support
+# device	cbb			# STRIP: no CardBus/PCMCIA bridge in pciconf output - this ultraportable predates that slot type
+# device	cardbus			# STRIP: removed with cbb
+
+# Serial (COM) ports
+# device	uart			# STRIP: no physical RS-232 port on this laptop, and no serial-console debugging is planned (DDB/KDB already removed)
+
+# Parallel port - obviously absent on a 2012 ultraportable
+# device	ppc			# STRIP
+# device	ppbus			# STRIP
+# device	lpt			# STRIP
+# device	ppi			# STRIP
+
+# device	puc			# STRIP: no multi-I/O expansion card present
+
+# PCI Ethernet - IMPORTANT FINDING: the pciconf -lv listing in your survey shows
+# NO wired Ethernet NIC of any kind (only vgapci0, MEI, 2x ehci, hdac0, pcib1,
+# iwn0, isab0, ahci0, ichsmb0). This machine is WiFi-only. Every wired NIC
+# driver, and the iflib/miibus frameworks that only exist to support them,
+# are therefore dead weight and stripped entirely below.
+# device	iflib			# STRIP: only needed by the iflib-based NIC drivers below, none of which are kept
+# device	em / igc / ix / ixv / ixl / iavf / ice / vmx / axp	# STRIP: no matching hardware
+# device	bxe / le / ti						# STRIP: no matching hardware
+# device	mlx5 / mlxfw / mlx5en					# STRIP: no matching hardware
+# device	miibus			# STRIP: only needed by the MII-bus wired NICs below, none kept
+# device	ae/age/alc/ale/bce/bfe/bge/cas/dc/et/fxp/gem/jme/lge/msk/nfe/nge/re/rl/sge/sis/sk/ste/stge/vge/vr/xl
+					# STRIP: entire block - no wired Ethernet controller exists on this hardware
+
+# Wireless NIC cards
+device		wlan			# KEEP (required): 802.11 stack
+# options	IEEE80211_DEBUG		# STRIP: debug logging, removed per no-debug-overhead policy
+# options	IEEE80211_SUPPORT_MESH	# STRIP: survey shows normal infrastructure-mode association (ssid Arsen, bssid ...), not mesh
+# device	wlan_wep		# STRIP: survey shows authmode WPA2/802.11i with AES-CCM in use - WEP is not in use and is legacy-insecure
+# device	wlan_tkip		# STRIP: same - your AP uses CCMP/AES, not TKIP
+device		wlan_ccmp		# KEEP (required): survey confirms "AES-CCM" cipher is what's actually negotiated with your AP
+# device	wlan_gcmp		# STRIP: GCMP is a WPA3/newer-hardware cipher; the Centrino Wireless-N 130 and your current WPA2/CCMP association don't use it
+device		wlan_amrr		# KEEP: rate-control algorithm fallback for the 802.11 stack, cheap to keep
+# device	ath / ath_hal / ath_rate_sample		# STRIP: Atheros chipsets - your card is Intel (iwn), not Atheros
+# options	AH_AR5416_INTERRUPT_MITIGATION		# STRIP: tied to ath, removed with it
+# device	ipw / iwi		# STRIP: older Intel 2100/2200/2915 chips, not this hardware
+device		iwn			# KEEP (required): confirmed hardware - "iwn0: <Intel Centrino Wireless-N 130>"
+# device	malo / mwl		# STRIP: Marvell WiFi, not present
+# device	ral			# STRIP: Ralink WiFi, not present
+# device	wpi			# STRIP: older Intel 3945ABG, not this hardware (yours is Centrino-N 130, covered by iwn)
+
+# Pseudo devices.
+device		crypto			# KEEP: base OpenCrypto framework, used by WPA2 and general crypto paths
+# device	aesni			# STRIP - grounded in your own dmesg: "aesni0: No AES or SHA support." The Celeron B800 is a cut-down Sandy Bridge SKU with AES-NI fused off; loading this driver would attach to nothing.
+device		loop			# KEEP (required): lo0 loopback, base OS requirement
+# device	padlock_rng		# STRIP: VIA-CPU-specific RNG driver; you have an Intel CPU
+# device	rdrand_rng		# STRIP: RDRAND instruction debuted with Ivy Bridge (2012); your Sandy Bridge B800 predates it and lacks the instruction entirely
+device		ether			# KEEP (required): generic Ethernet framing, used by wlan0 even though there's no wired NIC
+# device	vlan			# STRIP: no VLAN usage on a home network
+device		tuntap			# KEEP: needed for VPN clients (OpenVPN/WireGuard userspace) - fits your "general experimentation" use case
+device		md			# KEEP: memory-disk pseudo-device, handy for mounting ISOs or as a swap-backed device, negligible cost
+# device	gif			# STRIP: IPv4/IPv6 tunneling, mostly used for 6to4 IPv6 transition - moot with INET6 removed
+device		firmware		# KEEP (required): iwn0 loads its firmware blob through this framework - required for WiFi to work at all
+device		xz			# KEEP: used to decompress xz-packed firmware/module images at boot
+
+# The `bpf' device enables the Berkeley Packet Filter.
+device		bpf			# KEEP (required): DHCP will not work without bpf - you need this for your WiFi to get an address at all
+
+# USB support
+# options	USB_DEBUG		# STRIP: debug logging, removed per no-debug-overhead policy
+# device	uhci			# STRIP: USB1.1 companion controller - pciconf shows only ehci0/ehci1, no separate UHCI PCI functions on this chipset
+# device	ohci			# STRIP: same rationale, no OHCI hardware in the PCI listing
+device		ehci			# KEEP (required): confirmed hardware - "ehci0/ehci1: <Intel Cougar Point USB 2.0 controller>"
+# device	xhci			# STRIP: no xHCI/USB3 controller in pciconf - this 2011 HM65 chipset is USB2.0-only
+device		usb			# KEEP (required): core USB bus
+device		usbhid			# KEEP (required, per your spec): USB HID transport
+device		hkbd			# KEEP: modern HID keyboard driver, part of the evdev-integrated stack
+device		ukbd			# KEEP (required, per your spec): USB keyboard support
+device		umass			# KEEP (required, per your spec): USB mass storage - your flash drives
+
+# Sound support
+device		sound			# KEEP (required): base sound driver
+# device	snd_cmi			# STRIP: CMedia chip, not present
+# device	snd_csa			# STRIP: Crystal chip, not present
+# device	snd_emu10kx		# STRIP: Creative SoundBlaster Live/Audigy, not present
+# device	snd_es137x		# STRIP: Ensoniq AudioPCI, not present
+device		snd_hda			# KEEP (required): confirmed hardware - "hdac0: <Intel Cougar Point HDA Controller>" driving your Realtek ALC269 codec
+# device	snd_ich			# STRIP: legacy AC'97 driver - your audio is HDA, not AC'97
+# device	snd_via8233		# STRIP: VIA chip, not present
+
+# MMC/SD - no SD host controller present in the pciconf listing
+# device	mmc			# STRIP
+# device	mmcsd			# STRIP
+# device	sdhci			# STRIP
+
+# VirtIO support - this is bare-metal hardware (SMBIOS vendor: SAMSUNG ELECTRONICS),
+# not a VM guest, so every VirtIO/hypervisor-guest driver below is irrelevant:
+# device	virtio / virtio_pci / vtnet / virtio_blk / virtio_scsi / virtio_balloon	# STRIP
+# device	kvm_clock		# STRIP: KVM paravirtual clock, not a VM
+# device	hyperv			# STRIP: Hyper-V guest drivers, not a VM
+# options	XENHVM			# STRIP: Xen guest infra, not a VM
+# device	xenefi / xenpci / xentimer					# STRIP: Xen, not a VM
+
+# device	netmap			# STRIP: specialized high-perf packet capture/generation framework, not needed for browsing/gaming
+
+# evdev interface - KEEP: important for gaming. SDL2/Steam/Proton titles under
+# the Linuxulator expect Linux-style evdev input devices to see your keyboard/
+# trackpad/any USB controller correctly.
+options 	EVDEV_SUPPORT		# KEEP: surfaces legacy atkbd/psm/ukbd input through evdev too
+device		evdev			# KEEP: evdev input event device support
+device		uinput			# KEEP: lets userspace (Wine/Proton controller emulation) inject input events
+
+# HID support
+# options	HID_DEBUG		# STRIP: debug logging, removed per no-debug-overhead policy
+device		hid			# KEEP (required): generic HID framework
+device		hidbus			# KEEP (required): generic HID bus
+# options	IICHID_SAMPLING		# STRIP: workaround for I2C-HID touchpads; your trackpad is PS/2 (psm0), not I2C-HID
+
+# EFI devices
+device		efidev			# KEEP (required): UEFI boot system
+device		efirtc			# KEEP (required): confirmed hardware - dmesg shows "efirtc0: <EFI Realtime Clock>" is your actual RTC
