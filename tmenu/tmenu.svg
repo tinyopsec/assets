@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="24 28 252 72" width="1008" height="288" role="img" aria-labelledby="t d" xmlns:c2pa="http://c2pa.org/manifest">
+  <title id="t">tmenu</title>
+  <desc id="d">Логотип tmenu: буква t на выделенной плашке, как выбранный пункт меню, и курсор.</desc>
+  <!-- плашка выбора -->
+  <rect x="24" y="28" width="48" height="72" fill="#005577"/>
+  <g fill="none" stroke-width="7" stroke-linecap="square" stroke-linejoin="miter">
+    <!-- t -->
+    <path d="M46 38 V76 Q46 88 58 88 H62 M34 54 H62" stroke="#eeeeee"/>
+    <!-- m e n u -->
+    <g stroke="#bbbbbb">
+      <path d="M80 88 V54 H112 V88 M96 54 V88"/>
+      <path d="M128 71 H160 V54 H128 V88 H160"/>
+      <path d="M176 88 V54 H208 V88"/>
+      <path d="M224 54 V88 H256 V54"/>
+    </g>
+  </g>
+  <!-- курсор -->
+  <rect x="268" y="40" width="8" height="52" fill="#5599bb"/>
+</svg>
